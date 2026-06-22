@@ -1,0 +1,737 @@
+extends Sprite2D
+
+const BOARD_SIZE = 8
+const CELL_WIDTH = 81
+
+const texture_holder = preload("res://texture_holder.tscn")
+
+const B_bishop = preload("res://sprite/B_bishop.png")
+const B_horse = preload("res://sprite/B_horse.png")
+const B_king = preload("res://sprite/B_king.png")
+const B_queen = preload("res://sprite/B_queen.png")
+const B_rook = preload("res://sprite/B_rook.png")
+const B_soilder = preload("res://sprite/B_solider.png")
+const w_bishop = preload("res://sprite/W_bishop.png")
+const w_horse = preload("res://sprite/W_horse.png")
+const w_king = preload("res://sprite/W_king.png")
+const w_queen = preload("res://sprite/W_queen.png")
+const w_rook = preload("res://sprite/W_rook.png")
+const w_soilder = preload("res://sprite/W_soilder.png")
+
+const turn_black = preload("res://sprite/turn-black.png")
+const turn_white = preload("res://sprite/turn-white.png")
+
+const piece_move = preload("res://sprite/Piece_move.png")
+
+@onready var piece = $piece
+@onready var dot = $dot
+@onready var turn = $turn
+var clock_timer = null
+var white_time_label = null
+var black_time_label = null
+
+# piece constants (positive = white, negative = black)
+const EMPTY = 0
+const W_PAWN = 1
+const W_KNIGHT = 2
+const W_BISHOP = 3
+const W_ROOK = 4
+const W_QUEEN = 5
+const W_KING = 6
+
+var board : Array = []
+var white_turn : bool = true
+var selecting : bool = true
+var moves : Array = []
+var selected_piece : Vector2 = Vector2(-1, -1)
+var promotion_square = null
+var white_captured : Array =[]  
+var black_captured : Array =[]  
+
+# timers (seconds)
+var white_time : int = 300
+var black_time : int = 300
+
+func _ready():
+	# assign optional nodes if present
+	if has_node("ClockTimer"):
+		clock_timer = $ClockTimer
+	if has_node("WhiteTime"):
+		white_time_label = $WhiteTime
+	if has_node("BlackTime"):
+		black_time_label = $BlackTime
+
+
+
+	board = []
+	board.append([W_ROOK, W_KNIGHT, W_BISHOP, W_QUEEN, W_KING, W_BISHOP, W_KNIGHT, W_ROOK])
+	board.append([W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN, W_PAWN])
+	board.append([EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY])
+	board.append([EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY])
+	board.append([EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY])
+	board.append([EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY])
+	board.append([-W_PAWN, -W_PAWN, -W_PAWN, -W_PAWN, -W_PAWN, -W_PAWN, -W_PAWN, -W_PAWN])
+	board.append([-W_ROOK, -W_KNIGHT, -W_BISHOP, -W_QUEEN, -W_KING, -W_BISHOP, -W_KNIGHT, -W_ROOK])
+
+	if clock_timer:
+		clock_timer.wait_time = 1
+		clock_timer.connect("timeout", Callable(self, "_on_clock_tick"))
+		clock_timer.start()
+
+	display_board()
+
+func _input(event):
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		var mp = get_global_mouse_position()
+		if is_mouse_out(mp):
+			return
+		var col = int(mp.x / CELL_WIDTH)
+		var row = int(-mp.y / CELL_WIDTH)
+		if not selecting:
+			var val = board[row][col]
+			if val != EMPTY and ((white_turn and val > 0) or (not white_turn and val < 0)):
+				selected_piece = Vector2(row, col)
+				moves = get_legal_moves_from(selected_piece)
+				if moves.size() == 0:
+					selecting = false
+				else:
+					show_dots()
+					selecting = true
+		else:
+			set_move(row, col)
+
+func is_mouse_out(mp: Vector2) -> bool:
+	if mp.x < 0 or mp.x >= BOARD_SIZE * CELL_WIDTH: return true
+	if mp.y > 0 or mp.y <= -BOARD_SIZE * CELL_WIDTH: return true
+	return false
+
+func display_board():
+	for child in piece.get_children():
+		child.queue_free()
+
+	for i in range(BOARD_SIZE):
+		for j in range(BOARD_SIZE):
+			var holder = texture_holder.instantiate()
+			piece.add_child(holder)
+			holder.global_position = Vector2(j * CELL_WIDTH + (CELL_WIDTH / 2), -i * CELL_WIDTH - (CELL_WIDTH / 2))
+			match board[i][j]:
+				-6: holder.texture = B_king
+				-5: holder.texture = B_queen
+				-4: holder.texture = B_rook
+				-3: holder.texture = B_bishop
+				-2: holder.texture = B_horse
+				-1: holder.texture = B_soilder
+				0: holder.texture = null
+				6: holder.texture = w_king
+				5: holder.texture = w_queen
+				4: holder.texture = w_rook
+				3: holder.texture = w_bishop
+				2: holder.texture = w_horse
+				1: holder.texture = w_soilder
+
+	if white_turn:
+		turn.texture = turn_white
+	else:
+		turn.texture = turn_black
+	_update_timer_labels()
+
+func show_options():
+	moves = get_legal_moves_from(selected_piece)
+	if moves.size() == 0:
+		selecting = false
+		return
+	show_dots()
+
+func show_dots():
+	delete_dots()
+	for i in moves:
+		var holder = texture_holder.instantiate()
+		dot.add_child(holder)
+		holder.texture = piece_move
+		holder.global_position = Vector2(i.y * CELL_WIDTH + (CELL_WIDTH / 2), -i.x * CELL_WIDTH - (CELL_WIDTH / 2))
+
+func delete_dots():
+	for child in dot.get_children():
+		child.queue_free()
+
+func set_move(target_row: int, target_col: int):
+	for i in moves:
+		if i.x == target_row and i.y == target_col:
+			var piece_val = board[selected_piece.x][selected_piece.y]
+			var captured = board[target_row][target_col]
+			# Track captured piece
+			if captured != EMPTY:
+				if captured > 0:
+					white_captured.append(captured)
+				else:
+					black_captured.append(captured)
+			# handle pawn promotion (auto-queen). Promotion_square can be used to trigger UI instead.
+			if abs(piece_val) == W_PAWN:
+				if piece_val > 0 and target_row == 7:
+					board[target_row][target_col] = W_QUEEN
+				elif piece_val < 0 and target_row == 0:
+					board[target_row][target_col] = -W_QUEEN
+				else:
+					board[target_row][target_col] = piece_val
+			else:
+				board[target_row][target_col] = piece_val
+			board[selected_piece.x][selected_piece.y] = EMPTY
+			white_turn = not white_turn
+			display_board()
+			break
+	delete_dots()
+	moves.clear()
+	selecting = false
+	_post_move_checks()
+
+func get_moves_for_square(pos: Vector2) -> Array:
+	var saved_selected = selected_piece
+	selected_piece = pos
+	var _move = []
+	var val = board[pos.x][pos.y]
+	if val == EMPTY:
+		selected_piece = saved_selected
+		return _move
+	match abs(val):
+		W_PAWN:
+			_move = get_pawn_moves()
+		W_KNIGHT:
+			_move = get_knight_moves()
+		W_BISHOP:
+			_move = get_bishop_moves()
+		W_ROOK:
+			_move = get_rook_moves()
+		W_QUEEN:
+			_move = get_queen_moves()
+		W_KING:
+			_move = get_king_moves()
+	selected_piece = saved_selected
+	return _move
+
+func get_legal_moves_from(from_pos: Vector2) -> Array:
+	var legal = []
+	var pseudo = get_moves_for_square(from_pos)
+	for to in pseudo:
+		if not _would_cause_self_check(from_pos, to):
+			legal.append(to)
+	return legal
+
+func get_legal_moves() -> Array:
+	var legal = []
+	var side_sign = 1 if white_turn else -1
+	for r in range(BOARD_SIZE):
+		for c in range(BOARD_SIZE):
+			if board[r][c] * side_sign > 0:
+				var from = Vector2(r, c)
+				var pseudo = get_moves_for_square(from)
+				for to in pseudo:
+					if not _would_cause_self_check(from, to):
+						legal.append(to)
+	return legal
+
+func _would_cause_self_check(from: Vector2, to: Vector2) -> bool:
+	var copyb = _copy_board(board)
+	var moving = copyb[from.x][from.y]
+	copyb[to.x][to.y] = moving
+	copyb[from.x][from.y] = EMPTY
+	return _is_in_check_state(copyb, white_turn)
+
+func _copy_board(src: Array) -> Array:
+	var out = []
+	for row in src:
+		var newr = []
+		for v in row:
+			newr.append(v)
+		out.append(newr)
+	return out
+
+func _is_in_check_state(bd: Array, check_white: bool) -> bool:
+	# find king
+	var king_val = W_KING if check_white else -W_KING
+	var king_pos = null
+	for r in range(BOARD_SIZE):
+		for c in range(BOARD_SIZE):
+			if bd[r][c] == king_val:
+				king_pos = Vector2(r, c)
+				break
+		if king_pos: break
+	if king_pos == null:
+		return false
+	# iterate opponent pieces and see if any pseudo-legal move hits the king
+	var opp_sign = -1 if check_white else 1
+	for r in range(BOARD_SIZE):
+		for c in range(BOARD_SIZE):
+			if bd[r][c] * opp_sign > 0:
+				var piece_type = abs(bd[r][c])
+				var from_pos = Vector2(r, c)
+				var moves_local = []
+				match piece_type:
+					W_PAWN:
+						moves_local = _pawn_moves_on_board(bd, from_pos)
+					W_KNIGHT:
+						moves_local = _knight_moves_on_board(bd, from_pos)
+					W_BISHOP:
+						moves_local = _bishop_moves_on_board(bd, from_pos)
+					W_ROOK:
+						moves_local = _rook_moves_on_board(bd, from_pos)
+					W_QUEEN:
+						moves_local = _queen_moves_on_board(bd, from_pos)
+					W_KING:
+						moves_local = _king_moves_on_board(bd, from_pos)
+				for m in moves_local:
+					if m == king_pos:
+						return true
+	return false
+
+func _post_move_checks():
+	# after each move, check for check, checkmate, stalemate
+	var in_check = _is_in_check_state(board, white_turn)
+	var has_legal = false
+	for r in range(BOARD_SIZE):
+		for c in range(BOARD_SIZE):
+			if board[r][c] == EMPTY: continue
+			if (white_turn and board[r][c] > 0) or (not white_turn and board[r][c] < 0):
+				var from = Vector2(r, c)
+				var pseudo = get_moves_for_square(from)
+				for to in pseudo:
+					if not _would_cause_self_check(from, to):
+						has_legal = true
+						break
+				if has_legal:
+					break
+		if has_legal: break
+	if not has_legal:
+		if in_check:
+			print("Checkmate! " + ("White" if (not white_turn) else "Black") + " wins.")
+		else:
+			print("Stalemate! Draw.")
+	else:
+		if in_check:
+			print(("White" if white_turn else "Black") + " is in check.")
+
+# ---- move generation helpers (operate on current board) ----
+func get_rook_moves() -> Array:
+	var _move = []
+	var directions = [Vector2(0, 1), Vector2(0, -1), Vector2(1, 0), Vector2(-1, 0)]
+	for d in directions:
+		_move += ray_moves_on_board(board, selected_piece, d)
+	return _move
+
+func get_bishop_moves() -> Array:
+	var _move = []
+	var directions = [Vector2(1, 1), Vector2(-1, 1), Vector2(1, -1), Vector2(-1, -1)]
+	for d in directions:
+		_move += ray_moves_on_board(board, selected_piece, d)
+	return _move
+
+func get_queen_moves() -> Array:
+	var _move = []
+	var directions = [Vector2(0, 1), Vector2(0, -1), Vector2(1, 0), Vector2(-1, 0), Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]
+	for d in directions:
+		_move += ray_moves_on_board(board, selected_piece, d)
+	return _move
+
+func get_king_moves() -> Array:
+	var _move = []
+	var directions = [Vector2(0, 1), Vector2(0, -1), Vector2(1, 0), Vector2(-1, 0), Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]
+	for d in directions:
+		var pos = selected_piece + d
+		if is_inside(pos):
+			if is_empty(pos) or is_enemy(pos):
+				_move.append(pos)
+	return _move
+
+func get_knight_moves() -> Array:
+	var _move = []
+	var directions = [Vector2(2, 1), Vector2(2, -1), Vector2(1, 2), Vector2(-1, 2), Vector2(-2, 1), Vector2(-2, -1), Vector2(1, -2), Vector2(-1, -2)]
+	for d in directions:
+		var pos = selected_piece + d
+		if is_inside(pos) and (is_empty(pos) or is_enemy(pos)):
+			_move.append(pos)
+	return _move
+
+func get_pawn_moves() -> Array:
+	var _move = []
+	var piece_val = board[selected_piece.x][selected_piece.y]
+	var direction = Vector2(1, 0) if piece_val > 0 else Vector2(-1, 0)
+	var start_row = 1 if piece_val > 0 else 6
+	var forward = selected_piece + direction
+	if is_inside(forward) and is_empty(forward):
+		_move.append(forward)
+	var double = selected_piece + direction * 2
+	if selected_piece.x == start_row and is_inside(double) and is_empty(double) and is_empty(selected_piece + direction):
+		_move.append(double)
+	var cap_left = selected_piece + Vector2(direction.x, -1)
+	if is_inside(cap_left) and is_enemy(cap_left):
+		_move.append(cap_left)
+	var cap_right = selected_piece + Vector2(direction.x, 1)
+	if is_inside(cap_right) and is_enemy(cap_right):
+		_move.append(cap_right)
+	return _move
+
+func ray_moves_on_board(bd: Array, from_pos: Vector2, direction: Vector2) -> Array:
+	var res = []
+	var pos = from_pos + direction
+	while pos.x >= 0 and pos.x < BOARD_SIZE and pos.y >= 0 and pos.y < BOARD_SIZE:
+		if bd[pos.x][pos.y] == EMPTY:
+			res.append(pos)
+		elif (bd[pos.x][pos.y] > 0 and bd[from_pos.x][from_pos.y] < 0) or (bd[pos.x][pos.y] < 0 and bd[from_pos.x][from_pos.y] > 0):
+			res.append(pos)
+			break
+		else:
+			break
+		pos += direction
+	return res
+
+# board-specific move generators for check detection (operate on provided board)
+func _pawn_moves_on_board(bd: Array, from_pos: Vector2) -> Array:
+	var sp = from_pos
+	var val = bd[sp.x][sp.y]
+	var direction = Vector2(1, 0) if val > 0 else Vector2(-1, 0)
+	var out = []
+	var left = sp + Vector2(direction.x, -1)
+	var right = sp + Vector2(direction.x, 1)
+	if left.x >= 0 and left.x < BOARD_SIZE and left.y >= 0 and left.y < BOARD_SIZE:
+		if bd[left.x][left.y] != EMPTY and ((val > 0 and bd[left.x][left.y] < 0) or (val < 0 and bd[left.x][left.y] > 0)):
+			out.append(left)
+	if right.x >= 0 and right.x < BOARD_SIZE and right.y >= 0 and right.y < BOARD_SIZE:
+		if bd[right.x][right.y] != EMPTY and ((val > 0 and bd[right.x][right.y] < 0) or (val < 0 and bd[right.x][right.y] > 0)):
+			out.append(right)
+	return out
+
+func _knight_moves_on_board(bd: Array, from_pos: Vector2) -> Array:
+	var out = []
+	var dirs = [Vector2(2, 1), Vector2(2, -1), Vector2(1, 2), Vector2(-1, 2), Vector2(-2, 1), Vector2(-2, -1), Vector2(1, -2), Vector2(-1, -2)]
+	var val = bd[from_pos.x][from_pos.y]
+	for d in dirs:
+		var p = from_pos + d
+		if p.x >= 0 and p.x < BOARD_SIZE and p.y >= 0 and p.y < BOARD_SIZE:
+			if bd[p.x][p.y] == EMPTY or (bd[p.x][p.y] > 0 and val < 0) or (bd[p.x][p.y] < 0 and val > 0):
+				out.append(p)
+	return out
+
+func _bishop_moves_on_board(bd: Array, from_pos: Vector2) -> Array:
+	var out = []
+	var dirs = [Vector2(1, 1), Vector2(-1, 1), Vector2(1, -1), Vector2(-1, -1)]
+	for d in dirs:
+		out += ray_moves_on_board(bd, from_pos, d)
+	return out
+
+func _rook_moves_on_board(bd: Array, from_pos: Vector2) -> Array:
+	var out = []
+	var dirs = [Vector2(0, 1), Vector2(0, -1), Vector2(1, 0), Vector2(-1, 0)]
+	for d in dirs:
+		out += ray_moves_on_board(bd, from_pos, d)
+	return out
+
+func _queen_moves_on_board(bd: Array, from_pos: Vector2) -> Array:
+	var out = []
+	var dirs = [Vector2(0, 1), Vector2(0, -1), Vector2(1, 0), Vector2(-1, 0), Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]
+	for d in dirs:
+		out += ray_moves_on_board(bd, from_pos, d)
+	return out
+
+func _king_moves_on_board(bd: Array, from_pos: Vector2) -> Array:
+	var out = []
+	var dirs = [Vector2(0, 1), Vector2(0, -1), Vector2(1, 0), Vector2(-1, 0), Vector2(1, 1), Vector2(1, -1), Vector2(-1, 1), Vector2(-1, -1)]
+	var val = bd[from_pos.x][from_pos.y]
+	for d in dirs:
+		var p = from_pos + d
+		if p.x >= 0 and p.x < BOARD_SIZE and p.y >= 0 and p.y < BOARD_SIZE:
+			if bd[p.x][p.y] == EMPTY or (bd[p.x][p.y] > 0 and val < 0) or (bd[p.x][p.y] < 0 and val > 0):
+				out.append(p)
+	return out
+
+func is_inside(pos: Vector2) -> bool:
+	return pos.x >= 0 and pos.x < BOARD_SIZE and pos.y >= 0 and pos.y < BOARD_SIZE
+
+func is_empty(pos: Vector2) -> bool:
+	return board[pos.x][pos.y] == EMPTY
+
+func is_enemy(pos: Vector2) -> bool:
+	var selected_val = board[selected_piece.x][selected_piece.y]
+	var target_val = board[pos.x][pos.y]
+	if target_val == EMPTY:
+		return false
+	return (selected_val > 0 and target_val < 0) or (selected_val < 0 and target_val > 0)
+
+func promote(_var : Vector2):
+	promotion_square = _var
+	# Placeholder for promotion UI; by default we auto-promote to queen
+	var r = int(_var.x)
+	var c = int(_var.y)
+	if board[r][c] > 0:
+		board[r][c] = W_QUEEN
+	elif board[r][c] < 0:
+		board[r][c] = -W_QUEEN
+	display_board()
+
+# Timer tick
+func _on_clock_tick():
+	if white_turn:
+		white_time -= 1
+	else:
+		black_time -= 1
+	_update_timer_labels()
+	if white_time <= 0 or black_time <= 0:
+		if clock_timer:
+			clock_timer.stop()
+		print("Time up! " + ("Black" if white_time <= 0 else "White") + " wins by timeout.")
+
+func _update_timer_labels():
+	if white_time_label:
+		white_time_label.text = _format_time(white_time)
+	if black_time_label:
+		black_time_label.text = _format_time(black_time)
+
+func _format_time(sec: int) -> String:
+	if sec < 0:
+		sec = 0
+	var m = sec / 60
+	var s = sec % 60
+	var ms = str(m)
+	var ss = str(s)
+	if ms.length() < 2:
+		ms = "0" + ms
+	if ss.length() < 2:
+		ss = "0" + ss
+	return ms + ":" + ss
+
+var output_panel = null
+var output_container = null
+var turn_display = null
+var move_history_display = null
+var game_status_display = null
+var board_info_display = null
+
+func create_output_screen_ui():
+	# Create main CanvasLayer for output screen
+	var output_layer = CanvasLayer.new()
+	output_layer.name = "OutputScreenLayer"
+	output_layer.layer = 10  # Ensure it's on top
+	add_child(output_layer)
+	
+	# Create main output panel
+	output_panel = Panel.new()
+	output_panel.name = "OutputPanel"
+	output_layer.add_child(output_panel)
+	output_panel.anchor_left = 0
+	output_panel.anchor_top = 0
+	output_panel.anchor_right = 0.25
+	output_panel.anchor_bottom = 1
+	output_panel.offset_right = -5
+	
+	# Style output panel
+	var output_style = StyleBoxFlat.new()
+	output_style.bg_color = Color(0.05, 0.05, 0.1, 0.98)
+	output_style.border_color = Color(0.2, 0.6, 1.0)
+	output_style.set_border_enabled_all(true)
+	output_style.set_border_width_all(3)
+	output_style.set_content_margin_all(10)
+	output_panel.add_theme_stylebox_override("panel", output_style)
+	
+	# Create scroll container for content
+	var scroll_container = ScrollContainer.new()
+	scroll_container.name = "OutputScrollContainer"
+	output_panel.add_child(scroll_container)
+	scroll_container.anchor_left = 0
+	scroll_container.anchor_top = 0
+	scroll_container.anchor_right = 1
+	scroll_container.anchor_bottom = 1
+	scroll_container.offset_left = 10
+	scroll_container.offset_top = 10
+	scroll_container.offset_right = -10
+	scroll_container.offset_bottom = -10
+	
+	# Create VBox container for organizing content
+	output_container = VBoxContainer.new()
+	output_container.name = "OutputContainer"
+	scroll_container.add_child(output_container)
+	output_container.anchor_left = 0
+	output_container.anchor_top = 0
+	output_container.anchor_right = 1
+	output_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	
+	# Add spacing
+	output_container.add_theme_constant_override("separation", 10)
+	
+	# Create Turn Display Section
+	create_output_turn_section()
+	
+	# Create Game Status Section
+	create_output_status_section()
+	
+	# Create Board Info Section
+	create_output_board_info_section()
+	
+	# Create Time Section
+	create_output_time_section()
+	
+	# Create Move History Section
+	create_output_move_history_section()
+	
+	# Create Captured Pieces Section
+	create_output_captured_section()
+	
+func create_output_turn_section():
+	# Section title
+	var turn_title = Label.new()
+	turn_title.text = "═══ CURRENT TURN ═══"
+	turn_title.add_theme_font_size_override("font_size", 18)
+	turn_title.add_theme_color_override("font_color", Color(0.4, 1.0, 0.4))
+	output_container.add_child(turn_title)
+	
+	# Turn display
+	turn_display = Label.new()
+	turn_display.name = "OutputTurnDisplay"
+	turn_display.text = "WHITE'S TURN"
+	turn_display.add_theme_font_size_override("font_size", 24)
+	turn_display.add_theme_color_override("font_color", Color.WHITE)
+	turn_display.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(turn_display)
+	
+	# Move counter
+	var move_label = Label.new()
+	move_label.name = "OutputMoveLabel"
+	move_label.text = "Move: 1"
+	move_label.add_theme_font_size_override("font_size", 14)
+	move_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	move_label.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(move_label)
+	
+	# Add separator
+	var separator1 = Label.new()
+	separator1.text = "─────────────────"
+	separator1.add_theme_font_size_override("font_size", 12)
+	separator1.add_theme_color_override("font_color", Color(0.3, 0.3, 0.3))
+	separator1.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(separator1)
+
+func create_output_status_section():
+	# Section title
+	var status_title = Label.new()
+	status_title.text = "═══ GAME STATUS ═══"
+	status_title.add_theme_font_size_override("font_size", 18)
+	status_title.add_theme_color_override("font_color", Color(1.0, 0.8, 0.2))
+	output_container.add_child(status_title)
+	
+	# Status display
+	game_status_display = Label.new()
+	game_status_display.name = "OutputGameStatus"
+	game_status_display.text = "GAME IN PROGRESS"
+	game_status_display.add_theme_font_size_override("font_size", 16)
+	game_status_display.add_theme_color_override("font_color", Color(0.4, 1.0, 0.4))
+	game_status_display.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(game_status_display)
+	
+	# Add separator
+	var separator2 = Label.new()
+	separator2.text = "─────────────────"
+	separator2.add_theme_font_size_override("font_size", 12)
+	separator2.add_theme_color_override("font_color", Color(0.3, 0.3, 0.3))
+	separator2.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(separator2)
+
+func create_output_board_info_section():
+	# Section title
+	var board_title = Label.new()
+	board_title.text = "═══ BOARD INFO ═══"
+	board_title.add_theme_font_size_override("font_size", 18)
+	board_title.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+	output_container.add_child(board_title)
+	
+	# Board info display
+	board_info_display = Label.new()
+	board_info_display.name = "OutputBoardInfo"
+	board_info_display.text = "Selected: None\nPossible Moves: 0"
+	board_info_display.add_theme_font_size_override("font_size", 14)
+	board_info_display.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	output_container.add_child(board_info_display)
+	
+	# Add separator
+	var separator3 = Label.new()
+	separator3.text = "─────────────────"
+	separator3.add_theme_font_size_override("font_size", 12)
+	separator3.add_theme_color_override("font_color", Color(0.3, 0.3, 0.3))
+	separator3.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(separator3)
+
+func create_output_time_section():
+	# Section title
+	var time_title = Label.new()
+	time_title.text = "═══ TIME CONTROL ═══"
+	time_title.add_theme_font_size_override("font_size", 18)
+	time_title.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+	output_container.add_child(time_title)
+	
+	# White time
+	var white_time_output = Label.new()
+	white_time_output.name = "OutputWhiteTime"
+	white_time_output.text = "White: 05:00"
+	white_time_output.add_theme_font_size_override("font_size", 14)
+	white_time_output.add_theme_color_override("font_color", Color.WHITE)
+	output_container.add_child(white_time_output)
+	
+	# Black time
+	var black_time_output = Label.new()
+	black_time_output.name = "OutputBlackTime"
+	black_time_output.text = "Black: 05:00"
+	black_time_output.add_theme_font_size_override("font_size", 14)
+	black_time_output.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	output_container.add_child(black_time_output)
+	
+	# Add separator
+	var separator4 = Label.new()
+	separator4.text = "─────────────────"
+	separator4.add_theme_font_size_override("font_size", 12)
+	separator4.add_theme_color_override("font_color", Color(0.3, 0.3, 0.3))
+	separator4.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(separator4)
+
+func create_output_move_history_section():
+	# Section title
+	var history_title = Label.new()
+	history_title.text = "═══ MOVE HISTORY ═══"
+	history_title.add_theme_font_size_override("font_size", 18)
+	history_title.add_theme_color_override("font_color", Color(0.8, 0.6, 1.0))
+	output_container.add_child(history_title)
+	
+	# Move history display
+	move_history_display = Label.new()
+	move_history_display.name = "OutputMoveHistory"
+	move_history_display.text = "No moves yet"
+	move_history_display.add_theme_font_size_override("font_size", 12)
+	move_history_display.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	output_container.add_child(move_history_display)
+	
+	# Add separator
+	var separator5 = Label.new()
+	separator5.text = "─────────────────"
+	separator5.add_theme_font_size_override("font_size", 12)
+	separator5.add_theme_color_override("font_color", Color(0.3, 0.3, 0.3))
+	separator5.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	output_container.add_child(separator5)
+
+func create_output_captured_section():
+	# Section title
+	var captured_title = Label.new()
+	captured_title.text = "═══ CAPTURED PIECES ═══"
+	captured_title.add_theme_font_size_override("font_size", 18)
+	captured_title.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
+	output_container.add_child(captured_title)
+	
+	# White captured
+	var white_cap_output = Label.new()
+	white_cap_output.name = "OutputWhiteCaptured"
+	white_cap_output.text = "White Captured: 0 pieces"
+	white_cap_output.add_theme_font_size_override("font_size", 12)
+	white_cap_output.add_theme_color_override("font_color", Color.WHITE)
+	output_container.add_child(white_cap_output)
+	
+	# Black captured
+	var black_cap_output = Label.new()
+	black_cap_output.name = "OutputBlackCaptured"
+	black_cap_output.text = "Black Captured: 0 pieces"
+	black_cap_output.add_theme_font_size_override("font_size", 12)
+	black_cap_output.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	output_container.add_child(black_cap_output)
